@@ -1,1 +1,3 @@
 ortools>=9.8
+langchain
+langchain-openai

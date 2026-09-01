@@ -413,6 +413,108 @@ def main():
     print_unscheduled(data, unscheduled_orders, combos_by_order)
     print_statistics(data, scheduled_rows, unscheduled_orders)
 
+    # --- NEW: export results for the LLM layer ---
+    output_dict = build_output_dict(data, scheduled_rows, unscheduled_orders, combos_by_order)
+    output_path = Path(__file__).parent / "scheduler_output.json"
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output_dict, f, indent=2)
+    print(f"\nScheduler output written to {output_path}")
+
+
+def build_output_dict(data, scheduled_rows, unscheduled_orders, combos_by_order):
+    """
+    Convert the scheduler's results into a plain JSON-serializable dict.
+    This is purely a reporting/export step - it reads values that
+    build_and_solve() already produced; it does not re-solve or alter
+    anything.
+    """
+    machine_name = {m["id"]: m["name"] for m in data["machines"]}
+    worker_name = {w["id"]: w["name"] for w in data["workers"]}
+
+    # --- Scheduled orders ---
+    scheduled_out = []
+    for (o_id, product, m_id, w_id, start_h, end_h,
+         deadline_h, lateness_h, penalty, priority) in scheduled_rows:
+        scheduled_out.append({
+            "order_id": o_id,
+            "product": product,
+            "priority": priority,
+            "machine_id": m_id,
+            "machine_name": machine_name[m_id],
+            "worker_id": w_id,
+            "worker_name": worker_name[w_id],
+            "start": hour_offset_to_clock(start_h),
+            "end": hour_offset_to_clock(end_h),
+            "deadline": hour_offset_to_clock(deadline_h),
+            "lateness_hours": lateness_h,
+            "penalty": penalty,
+            "is_late": lateness_h > 0,
+        })
+
+    # --- Unscheduled orders + reasons (reuses existing diagnostics) ---
+    unscheduled_out = []
+    for o in unscheduled_orders:
+        unscheduled_out.append({
+            "order_id": o["id"],
+            "product": o["product"],
+            "priority": o["priority"],
+            "reason": explain_unscheduled(o, data["machines"], combos_by_order),
+        })
+
+    # --- Machine utilization ---
+    machine_hours = {}
+    for row in scheduled_rows:
+        m_id = row[2]
+        duration = row[5] - row[4]
+        machine_hours[m_id] = machine_hours.get(m_id, 0) + duration
+
+    machine_utilization = []
+    for m in data["machines"]:
+        used = machine_hours.get(m["id"], 0)
+        window = to_hour_offset(m["available"][1]) - to_hour_offset(m["available"][0])
+        machine_utilization.append({
+            "machine_id": m["id"],
+            "machine_name": m["name"],
+            "available_hours": window,
+            "busy_hours": used,
+            "idle_hours": window - used,
+        })
+
+    # --- Worker workload ---
+    worker_hours = {}
+    for row in scheduled_rows:
+        w_id = row[3]
+        duration = row[5] - row[4]
+        worker_hours[w_id] = worker_hours.get(w_id, 0) + duration
+
+    worker_workload = []
+    for w in data["workers"]:
+        worker_workload.append({
+            "worker_id": w["id"],
+            "worker_name": w["name"],
+            "shift": w["shift"],
+            "assigned_hours": worker_hours.get(w["id"], 0),
+        })
+
+    # --- Summary stats ---
+    late_orders = [r for r in scheduled_rows if r[7] > 0]
+    stats = {
+        "total_orders": len(data["orders"]),
+        "scheduled_count": len(scheduled_rows),
+        "unscheduled_count": len(unscheduled_orders),
+        "late_count": len(late_orders),
+        "on_time_count": len(scheduled_rows) - len(late_orders),
+        "total_lateness_penalty": sum(r[8] for r in scheduled_rows),
+    }
+
+    return {
+        "scheduled_orders": scheduled_out,
+        "unscheduled_orders": unscheduled_out,
+        "machine_utilization": machine_utilization,
+        "worker_workload": worker_workload,
+        "statistics": stats,
+    }
+
 
 if __name__ == "__main__":
     main()
