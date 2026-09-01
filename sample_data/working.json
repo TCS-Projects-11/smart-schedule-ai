@@ -1,0 +1,25 @@
+{
+  "workers": [
+    {"id": "W1", "name": "Worker A", "shift": ["08:00", "16:00"]},
+    {"id": "W2", "name": "Worker B", "shift": ["10:00", "18:00"]},
+    {"id": "W3", "name": "Worker C", "shift": ["08:00", "16:00"]}
+  ],
+  "machines": [
+    {"id": "M1", "name": "Machine 1", "available": ["08:00", "18:00"], "capabilities": ["A", "B"]},
+    {"id": "M2", "name": "Machine 2", "available": ["08:00", "14:00"], "capabilities": ["A"]},
+    {"id": "M3", "name": "Machine 3", "available": ["10:00", "18:00"], "capabilities": ["B", "C"]}
+  ],
+  "orders": [
+    {"id": "O1", "product": "A", "duration_hours": 3, "deadline": "13:00", "priority": 3},
+    {"id": "O2", "product": "B", "duration_hours": 2, "deadline": "16:00", "priority": 2},
+    {"id": "O3", "product": "C", "duration_hours": 2, "deadline": "18:00", "priority": 1},
+    {"id": "O4", "product": "A", "duration_hours": 2, "deadline": "17:00", "priority": 2}
+  ],
+  "constraints": {
+    "worker_can_do_only_one_order_at_a_time": true,
+    "machine_can_process_only_one_order_at_a_time": true,
+    "allow_overtime": false,
+    "minimize_late_orders": true,
+    "minimize_machine_idle_time": true
+  }
+}
