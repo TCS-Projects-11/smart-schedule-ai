@@ -12,8 +12,9 @@ def answer_question(llm, context_json: str, question: str) -> str:
         HumanMessage(
             content=(
                 f"Question: {question}\n\n"
-                "Answer using only the provided SCHEDULER_INPUT and "
-                "SCHEDULER_OUTPUT data. If the answer requires information "
+                "Answer using only the provided SCHEDULER_INPUT and"
+                "SCHEDULER OUTPUT data. If the answer requires information"
+                "Answer the questions related to the scheduling, machines, workers and constraints"
                 "not present in that data, say so explicitly."
             )
         ),

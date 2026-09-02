@@ -10,21 +10,16 @@
     {"id": "M3", "name": "Machine 3", "available": ["10:00", "18:00"], "capabilities": ["B", "C"]}
   ],
   "orders": [
-    {"id": "O1", "product": "A", "duration_hours": 4, "deadline": "11:00", "priority": 5},
-    {"id": "O2", "product": "A", "duration_hours": 3, "deadline": "12:00", "priority": 4},
-    {"id": "O3", "product": "B", "duration_hours": 4, "deadline": "14:00", "priority": 3},
-    {"id": "O4", "product": "C", "duration_hours": 3, "deadline": "15:00", "priority": 2},
-    {"id": "O5", "product": "A", "duration_hours": 3, "deadline": "16:00", "priority": 5},
-    {"id": "O6", "product": "B", "duration_hours": 4, "deadline": "17:00", "priority": 3},
-    {"id": "O7", "product": "C", "duration_hours": 3, "deadline": "18:00", "priority": 1},
-    {"id": "O8", "product": "A", "duration_hours": 2, "deadline": "13:00", "priority": 4}
+    {"id": "O1", "product": "A", "duration_hours": 3, "deadline": "13:00", "priority": 3},
+    {"id": "O2", "product": "B", "duration_hours": 2, "deadline": "16:00", "priority": 2},
+    {"id": "O3", "product": "C", "duration_hours": 2, "deadline": "18:00", "priority": 1},
+    {"id": "O4", "product": "A", "duration_hours": 2, "deadline": "17:00", "priority": 2}
   ],
   "constraints": {
     "worker_can_do_only_one_order_at_a_time": true,
     "machine_can_process_only_one_order_at_a_time": true,
     "allow_overtime": false,
     "minimize_late_orders": true,
-    "minimize_machine_idle_time": true,
-    "prioritize_high_priority_orders": true
+    "minimize_machine_idle_time": true
   }
 }

@@ -1,28 +1,11 @@
 """Shared LLM setup for the scheduling assistant."""
 
 import json
-import os
 from typing import Optional
+import httpx
 
-from langchain.chat_models import init_chat_model
-
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass
-
-try:
-    import truststore
-
-    # Use the Windows/OS certificate store so corporate TLS inspection
-    # (custom root CA) is trusted when calling Gemini/OpenAI.
-    truststore.inject_into_ssl()
-except ImportError:
-    pass
-
-DEFAULT_MODEL = os.environ.get("SCHEDULING_LLM_MODEL", "google_genai:gemini-2.5-flash")
+from langchain_openai import ChatOpenAI 
+client = httpx.Client(verify=False) 
 
 SYSTEM_INSTRUCTIONS = """You are a factory scheduling assistant.
 
@@ -52,25 +35,17 @@ STRICT RULES:
 """
 
 
-def create_llm(model: Optional[str] = None, temperature: float = 0.0):
-    """Create a chat model via LangChain's provider-agnostic initializer.
+def create_llm(temperature: float = 0.0):
+    
+    llm = ChatOpenAI( 
+      base_url="https://genailab.tcs.in",
+      model = "azure/genailab-maas-gpt-4o-mini", 
+      api_key="sk-nRMnsJrM3BVTaAWCDjeVUg",
+      http_client = client,
+      temperature=temperature
+    ) 
 
-    Pass any supported identifier, for example:
-      - google_genai:gemini-2.5-flash
-      - openai:gpt-4o-mini
-    Override with SCHEDULING_LLM_MODEL in the environment.
-    """
-    model_id = model or DEFAULT_MODEL
-    kwargs = {"temperature": temperature}
-
-    # Last-resort override for locked-down networks. Prefer the OS trust
-    # store (truststore above). Set SCHEDULING_SSL_VERIFY=false only if
-    # that still fails.
-    verify = os.environ.get("SCHEDULING_SSL_VERIFY", "true").strip().lower()
-    if verify in ("0", "false", "no"):
-        kwargs["client_args"] = {"verify": False}
-
-    return init_chat_model(model_id, **kwargs)
+    return llm
 
 
 def build_context_json(scheduler_input: dict, scheduler_output: dict) -> str:
