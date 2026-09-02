@@ -30,6 +30,24 @@ def to_hour_offset(time_str: str) -> float:
     hh, mm = time_str.split(":")
     return int(hh) - BASE_HOUR + (int(mm) / 60)
 
+def get_windows(entity: dict, single_key: str, list_key: str):
+    """
+    Return an entity's (machine/worker) availability as a list of
+    ["HH:MM", "HH:MM"] windows.
+
+    Backward compatible: if the entity still uses the original single
+    window field (e.g. "available": ["08:00","18:00"]), that's returned
+    as a one-item list. If it has been split into multiple windows
+    (e.g. "available_windows": [["08:00","10:00"], ["13:00","18:00"]] -
+    the result of carving out a downtime period), those are returned
+    instead. This is the only change needed to support "X unavailable
+    between A and B" - the CP-SAT constraint logic itself doesn't change,
+    it just gets a start-time domain built from possibly more than one
+    interval (see Domain.FromIntervals below).
+    """
+    if list_key in entity:
+        return entity[list_key]
+    return [entity[single_key]]
 
 def build_and_solve(data: dict):
     workers = data["workers"]
@@ -39,9 +57,11 @@ def build_and_solve(data: dict):
 
     horizon = 0
     for w in workers:
-        horizon = max(horizon, int(to_hour_offset(w["shift"][1])))
+        for w_start_s, w_end_s in get_windows(w, "shift", "shift_windows"):
+            horizon = max(horizon, int(to_hour_offset(w_end_s)))
     for m in machines:
-        horizon = max(horizon, int(to_hour_offset(m["available"][1])))
+        for m_start_s, m_end_s in get_windows(m, "available", "available_windows"):
+            horizon = max(horizon, int(to_hour_offset(m_end_s)))
 
     model = cp_model.CpModel()
 
@@ -70,23 +90,41 @@ def build_and_solve(data: dict):
             if o["product"] not in m["capabilities"]:
                 continue
 
-            m_start = to_hour_offset(m["available"][0])
-            m_end = to_hour_offset(m["available"][1])
+            machine_windows = get_windows(m, "available", "available_windows")
 
             for w in workers:
-                w_start = to_hour_offset(w["shift"][0])
-                w_end = to_hour_offset(w["shift"][1])
+                worker_windows = get_windows(w, "shift", "shift_windows")
 
-                earliest_start = max(m_start, w_start)
-                latest_start = min(m_end, w_end) - duration
+                # A machine or worker may now have MULTIPLE availability
+                # windows (e.g. split around a downtime period). Collect
+                # every feasible [earliest_start, latest_start] sub-range
+                # across all machine-window x worker-window pairs, then
+                # combine them into a single start-time DOMAIN (a union of
+                # intervals). This keeps the (order, machine, worker) key
+                # exactly as before - no downstream code needs to change -
+                # while correctly modeling gaps in availability.
+                feasible_ranges = []
+                for m_start_s, m_end_s in machine_windows:
+                    m_start = to_hour_offset(m_start_s)
+                    m_end = to_hour_offset(m_end_s)
+                    for w_start_s, w_end_s in worker_windows:
+                        w_start = to_hour_offset(w_start_s)
+                        w_end = to_hour_offset(w_end_s)
 
-                if latest_start < earliest_start:
+                        earliest_start = max(m_start, w_start)
+                        latest_start = min(m_end, w_end) - duration
+
+                        if latest_start >= earliest_start:
+                            feasible_ranges.append([int(earliest_start), int(latest_start)])
+
+                if not feasible_ranges:
                     continue
 
                 key = (o["id"], m["id"], w["id"])
                 presence[key] = model.new_bool_var(f"presence_{o['id']}_{m['id']}_{w['id']}")
-                start[key] = model.new_int_var(
-                    int(earliest_start), int(latest_start), f"start_{o['id']}_{m['id']}_{w['id']}"
+                start_domain = cp_model.Domain.FromIntervals(feasible_ranges)
+                start[key] = model.new_int_var_from_domain(
+                    start_domain, f"start_{o['id']}_{m['id']}_{w['id']}"
                 )
 
                 combos_by_order[o["id"]].append(key)
@@ -400,7 +438,10 @@ def print_statistics(data, scheduled_rows, unscheduled_orders):
         machine_hours[m_id] = machine_hours.get(m_id, 0) + duration
     for m in data["machines"]:
         used = machine_hours.get(m["id"], 0)
-        window = to_hour_offset(m["available"][1]) - to_hour_offset(m["available"][0])
+        window = sum(
+            to_hour_offset(e) - to_hour_offset(s)
+            for s, e in get_windows(m, "available", "available_windows")
+        )
         idle = window - used
         print(f"    {m['name']:<10}: {used}h busy / {window}h available -> {idle}h idle")
 
@@ -517,14 +558,20 @@ def build_output_dict(data, scheduled_rows, unscheduled_orders, combos_by_order)
     machine_utilization = []
     for m in data["machines"]:
         used = machine_hours.get(m["id"], 0)
-        avail_start = to_hour_offset(m["available"][0])
-        avail_end = to_hour_offset(m["available"][1])
-        window = avail_end - avail_start
+        windows = get_windows(m, "available", "available_windows")
+        window_hours = [(to_hour_offset(s), to_hour_offset(e)) for s, e in windows]
+        window = sum(e - s for s, e in window_hours)
         busy_intervals = sorted(busy_by_machine.get(m["id"], []), key=lambda x: x[0])
+
+        idle = []
+        for w_start, w_end in window_hours:
+            window_busy = [(s, e) for s, e in busy_intervals if s >= w_start and e <= w_end]
+            idle.extend(_idle_intervals(w_start, w_end, window_busy))
+
         machine_utilization.append({
             "machine_id": m["id"],
             "machine_name": m["name"],
-            "available": m["available"],
+            "available_windows": windows,
             "available_hours": window,
             "busy_hours": used,
             "idle_hours": window - used,
@@ -534,7 +581,7 @@ def build_output_dict(data, scheduled_rows, unscheduled_orders, combos_by_order)
             ],
             "idle_intervals": [
                 {"start": hour_offset_to_clock(s), "end": hour_offset_to_clock(e)}
-                for s, e in _idle_intervals(avail_start, avail_end, busy_intervals)
+                for s, e in idle
             ],
         })
 
@@ -550,7 +597,7 @@ def build_output_dict(data, scheduled_rows, unscheduled_orders, combos_by_order)
         worker_workload.append({
             "worker_id": w["id"],
             "worker_name": w["name"],
-            "shift": w["shift"],
+            "shift_windows": get_windows(w, "shift", "shift_windows"),
             "assigned_hours": worker_hours.get(w["id"], 0),
         })
 

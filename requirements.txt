@@ -5,3 +5,4 @@ langchain-openai
 langchain-google-genai
 python-dotenv
 truststore
+langgraph
