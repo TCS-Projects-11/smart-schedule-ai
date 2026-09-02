@@ -10,8 +10,11 @@ high-priority orders - and for anything it can't schedule, it explains why.
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from ortools.sat.python import cp_model
+
+from llm.assistant import SchedulingAssistant
 
 
 DATA_PATH = Path(__file__).parent / "data" / "factory_data.json"
@@ -402,8 +405,11 @@ def print_statistics(data, scheduled_rows, unscheduled_orders):
         print(f"    {m['name']:<10}: {used}h busy / {window}h available -> {idle}h idle")
 
 
-def main():
-    data = load_data(DATA_PATH)
+def create_schedule(data: Optional[dict] = None):
+    """Solve the factory schedule and return (input_data, output_dict) in memory."""
+    if data is None:
+        data = load_data(DATA_PATH)
+
     (solver, status, presence, start, scheduled, combos_by_order,
      combos_by_machine, combos_by_worker, order_duration, deadlines) = build_and_solve(data)
 
@@ -413,12 +419,49 @@ def main():
     print_unscheduled(data, unscheduled_orders, combos_by_order)
     print_statistics(data, scheduled_rows, unscheduled_orders)
 
-    # --- NEW: export results for the LLM layer ---
     output_dict = build_output_dict(data, scheduled_rows, unscheduled_orders, combos_by_order)
-    output_path = Path(__file__).parent / "scheduler_output.json"
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_dict, f, indent=2)
-    print(f"\nScheduler output written to {output_path}")
+    return data, output_dict
+
+
+def summarize_and_chat(scheduler_input: dict, scheduler_output: dict) -> None:
+    """Run the LLM summary, then an interactive Q&A loop over this schedule."""
+    try:
+        assistant = SchedulingAssistant(
+            scheduler_input=scheduler_input,
+            scheduler_output=scheduler_output,
+        )
+    except Exception as exc:
+        print(f"\nLLM assistant could not start: {exc}")
+        print("Set SCHEDULING_LLM_MODEL and the matching API key (GOOGLE_API_KEY or OPENAI_API_KEY).")
+        return
+
+    print()
+    print("=" * 70)
+    print("AUTOMATIC SCHEDULE SUMMARY")
+    print("=" * 70)
+    try:
+        print(assistant.generate_summary())
+    except Exception as exc:
+        print(f"Could not generate summary: {exc}")
+        return
+    assistant.interactive_qa()
+
+
+def main():
+    scheduler_input, scheduler_output = create_schedule()
+    summarize_and_chat(scheduler_input, scheduler_output)
+
+
+def _idle_intervals(avail_start, avail_end, busy_intervals):
+    idle = []
+    cursor = avail_start
+    for start_h, end_h in busy_intervals:
+        if start_h > cursor:
+            idle.append((cursor, start_h))
+        cursor = max(cursor, end_h)
+    if cursor < avail_end:
+        idle.append((cursor, avail_end))
+    return idle
 
 
 def build_output_dict(data, scheduled_rows, unscheduled_orders, combos_by_order):
@@ -461,23 +504,38 @@ def build_output_dict(data, scheduled_rows, unscheduled_orders, combos_by_order)
             "reason": explain_unscheduled(o, data["machines"], combos_by_order),
         })
 
-    # --- Machine utilization ---
+    # --- Machine utilization (including busy / idle intervals for Q&A) ---
+    busy_by_machine = {}
     machine_hours = {}
     for row in scheduled_rows:
         m_id = row[2]
-        duration = row[5] - row[4]
+        start_h, end_h = row[4], row[5]
+        duration = end_h - start_h
         machine_hours[m_id] = machine_hours.get(m_id, 0) + duration
+        busy_by_machine.setdefault(m_id, []).append((start_h, end_h))
 
     machine_utilization = []
     for m in data["machines"]:
         used = machine_hours.get(m["id"], 0)
-        window = to_hour_offset(m["available"][1]) - to_hour_offset(m["available"][0])
+        avail_start = to_hour_offset(m["available"][0])
+        avail_end = to_hour_offset(m["available"][1])
+        window = avail_end - avail_start
+        busy_intervals = sorted(busy_by_machine.get(m["id"], []), key=lambda x: x[0])
         machine_utilization.append({
             "machine_id": m["id"],
             "machine_name": m["name"],
+            "available": m["available"],
             "available_hours": window,
             "busy_hours": used,
             "idle_hours": window - used,
+            "busy_intervals": [
+                {"start": hour_offset_to_clock(s), "end": hour_offset_to_clock(e)}
+                for s, e in busy_intervals
+            ],
+            "idle_intervals": [
+                {"start": hour_offset_to_clock(s), "end": hour_offset_to_clock(e)}
+                for s, e in _idle_intervals(avail_start, avail_end, busy_intervals)
+            ],
         })
 
     # --- Worker workload ---
