@@ -2,5 +2,4 @@ venv
 .env
 __pycache__/
 *.pyc
-sample_data/
 data/factory_data_updated.json
