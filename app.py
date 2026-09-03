@@ -8,10 +8,6 @@ from llm.assistant import SchedulingAssistant
 st.set_page_config(page_title="Factory Scheduler", layout="wide")
 st.title("Factory Production Scheduler")
 
-# ---------------------------------------------------------------------
-# Dynamic input: let the user upload their own factory_data.json instead
-# of always solving the bundled sample file.
-# ---------------------------------------------------------------------
 st.sidebar.header("Schedule Input")
 uploaded_file = st.sidebar.file_uploader("Upload factory data (JSON)", type="json")
 
@@ -19,7 +15,6 @@ REQUIRED_KEYS = {"workers", "machines", "orders", "constraints"}
 
 
 def _validate(data: dict) -> str | None:
-    """Return an error message if the JSON is missing required structure, else None."""
     if not isinstance(data, dict):
         return "File must contain a single JSON object."
     missing = REQUIRED_KEYS - data.keys()
@@ -43,32 +38,32 @@ if uploaded_file is not None:
         st.sidebar.error(f"Invalid schedule data: {error}")
         st.stop()
 
-    # Only treat this as a NEW input if it's actually different from what's
-    # currently loaded (by content, not just presence of an uploaded_file),
-    # so re-rendering the page doesn't keep re-solving on every interaction.
     if st.session_state.get("uploaded_data") != new_data:
         st.session_state.uploaded_data = new_data
-        st.session_state.pop("schedule_result", None)   # force re-solve below
+        st.session_state.pop("schedule_result", None)
         st.session_state.pop("assistant", None)
         st.session_state.pop("summary", None)
         st.session_state.pop("chat_history", None)
         st.session_state.pop("reschedule_agent", None)
-        st.session_state.pop("pending_confirmation", None)
+        st.session_state.pop("pending_confirmations", None)
 
     st.sidebar.success(
         f"Using uploaded data: {len(new_data['workers'])} workers, "
         f"{len(new_data['machines'])} machines, {len(new_data['orders'])} orders."
     )
-    active_data = st.session_state.uploaded_data
-else:
-    active_data = None  # falls back to scheduler.py's bundled DATA_PATH
-    if "uploaded_data" in st.session_state:
-        st.sidebar.info("Using previously uploaded data. Upload a new file to replace it.")
-        active_data = st.session_state.uploaded_data
 
 # ---------------------------------------------------------------------
-# Run the solver once per input, cache the result so re-running the UI
-# (e.g. asking a question) doesn't re-solve the CP-SAT model.
+# STOP HERE if nothing has ever been uploaded - don't fall back to any
+# bundled/default data.
+# ---------------------------------------------------------------------
+if "uploaded_data" not in st.session_state:
+    st.info("Upload a factory data JSON file in the sidebar to generate a schedule.")
+    st.stop()
+
+active_data = st.session_state.uploaded_data
+
+# ---------------------------------------------------------------------
+# Run the solver once per input, cache the result.
 # ---------------------------------------------------------------------
 if "schedule_result" not in st.session_state or st.sidebar.button("Re-run schedule"):
     with st.spinner("Solving schedule..."):
@@ -78,7 +73,7 @@ if "schedule_result" not in st.session_state or st.sidebar.button("Re-run schedu
     st.session_state.pop("summary", None)
     st.session_state.pop("chat_history", None)
     st.session_state.pop("reschedule_agent", None)
-    st.session_state.pop("pending_confirmation", None)
+    st.session_state.pop("pending_confirmations", None)
 
 scheduler_input, scheduler_output = st.session_state.schedule_result
 stats = scheduler_output["statistics"]
